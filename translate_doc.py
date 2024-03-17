@@ -81,22 +81,11 @@ def get_loader(filename: str, file_content_type: str, file_path: str):
         loader = UnstructuredXMLLoader(file_path)
     elif file_ext == "md":
         loader = UnstructuredMarkdownLoader(file_path)
-    elif file_content_type == "application/epub+zip":
-        loader = UnstructuredEPubLoader(file_path)
-    elif (
-        file_content_type
-        == "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        or file_ext in ["doc", "docx"]
-    ):
+    elif file_ext in ["doc", "docx"]:
         loader = Docx2txtLoader(file_path)
-    elif file_content_type in [
-        "application/vnd.ms-excel",
-        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    ] or file_ext in ["xls", "xlsx"]:
+    elif file_ext in ["xls", "xlsx"]:
         loader = UnstructuredExcelLoader(file_path)
-    elif file_ext in known_source_ext or (
-        file_content_type and file_content_type.find("text/") >= 0
-    ):
+    elif file_ext in known_source_ext:
         loader = TextLoader(file_path)
     else:
         loader = TextLoader(file_path)
@@ -104,60 +93,80 @@ def get_loader(filename: str, file_content_type: str, file_path: str):
 
     return loader, known_type
 
-def translateDoc(file):
+def translateDoc(file, targetLang, llm):
+    print("目标语言:" + targetLang + ",大模型:" + llm)
     file_name_with_extension = os.path.basename(file.name)
     file_name_without_extension = os.path.splitext(file_name_with_extension)[0]
     content_type = os.path.splitext(file_name_with_extension)[1]
 
     loader, known_type = get_loader(os.path.basename(file.name), "", file.name)
     data = loader.load()
-    print(data[0].page_content)
 
     text_splitter = RecursiveCharacterTextSplitter(
-        # Set a really small chunk size, just to show.
         chunk_size=100,
         chunk_overlap=0,
         length_function=len,
         is_separator_regex=False,
     )
-    texts = text_splitter.split_text(data[0].page_content)
-   
+    
     with open('result.txt', 'w') as file:
         file.write("")
 
-    pageNum = 1;
-    for sentence in texts:
-        result = translateText(sentence)
+    sentenceNum = 0
+    previousSentence = ""
+    for document in data:
+        # texts = text_splitter.split_text(document.page_content)
+        # print("句子数量:")
+        # print(len(texts))
+        # for sentence in texts:
+        #     sentenceNum += 1
+        #     if sentence.isspace():
+        #         continue
+        #     print("正在翻译:" + str(sentenceNum) + "/" + str(len(texts)) + ":" + sentence)
+        #     result = translateText(sentence, targetLang, previousSentence, llm)
+        #     previousSentence = result
+        #     with open('result.txt', 'a') as file:
+        #         file.write(result)
+        #         file.write("\r\n")
+        #     if (sentenceNum == 10):
+        #         break;
+        if (document.page_content.isspace()):
+            continue
+        result = translateText(document.page_content, targetLang, previousSentence, llm)
+        translated = text_splitter.split_text(result)
+        previousSentence = translated[len(translated)-1]
         with open('result.txt', 'a') as file:
             file.write(result)
             file.write("\r\n")
-        pageNum += 1
-        if (pageNum == 10):
-            break;
+        #if (sentenceNum == 10):
+        #    break;
+    
     return open('result.txt', 'r').name
 
-def translateText(content):
+def translateText(content, targetLang, context, llm):
     output_parser = StrOutputParser()
     prompt = ChatPromptTemplate.from_messages([
-        ("system", "你是一个专业的翻译人员,你的任务是将我提供的文字翻译为英文,请直接输出翻译后的内容，不要输出任何多余的文本"),
-        ("user", "你要翻译的内容是:```{input}```")
+        ("system", "你是一个专业的翻译人员,我想把一个文档翻译为{targetLang}，每次我会提供给你一段要翻译的内容，注意：你只需要直接输出翻译后的内容，不要输出任何的提示。"),
+        ("user", "{input}")
     ])
-    llm = ChatOpenAI(
-        openai_api_base="https://api.chatanywhere.tech/v1", # 注意，末尾要加 /v1
-        openai_api_key="sk-YQRCTjFzTU6rCVM85QrEJlewchE2fE30VWcB1NWmMIYt94Qb",
-    )
-    # llm = Ollama(model="llama2-chinese")
-    # llm = Ollama(model="qwen:7b",base_url="http://121.15.182.141:11434")
-
+    if (llm == '本地ollama'):
+        llm = Ollama(model="qwen:7b",base_url="http://localhost:11434")
+    
+    if (llm == 'openAI'):
+        llm = ChatOpenAI(
+            openai_api_base="https://api.chatanywhere.tech/v1", # 注意，末尾要加 /v1
+            openai_api_key="sk-你的api key",
+        )
     chain = prompt | llm | output_parser
-    return chain.invoke({"input": content})
-
-    # llm = Ollama(model="llama2-chinese")
-    # chain = prompt | llm | output_parser
+    return chain.invoke({"input": content,"targetLang":targetLang,"context":context})
 
 demo = gr.Interface(
     fn=translateDoc,
-    inputs=["file"],
+    inputs=[
+        "file",
+        gr.Dropdown(choices=['English','中文'], value = 'English',label = '目标语言'),
+        gr.Dropdown(choices=['本地ollama','openAI'], value = 'openAI',label = '大模型')
+    ],
     outputs=["file"],
 )
 if __name__ == "__main__":
